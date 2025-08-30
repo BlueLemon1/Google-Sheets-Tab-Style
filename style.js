@@ -6,6 +6,8 @@
 // @match        https://docs.google.com/spreadsheets/*
 // @grant        none
 // @author       Bluelemon1
+// @updateURL    https://github.com/BlueLemon1/Google-Sheets-Tab-Style/raw/main/style.js
+// @downloadURL  https://github.com/BlueLemon1/Google-Sheets-Tab-Style/raw/main/style.js
 // ==/UserScript==
 
 (() => {

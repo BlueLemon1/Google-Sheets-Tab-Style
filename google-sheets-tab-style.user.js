@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Google Sheets Tab Style
 // @namespace    http://tampermonkey.net/
-// @version      4.0
-// @description  Fix for hover artifacts after clicking a tab
+// @version      5.0
+// @description  Google Spreadsheet Styler
 // @match        https://docs.google.com/spreadsheets/*
 // @grant        none
 // @author       Bluelemon1
@@ -14,200 +14,192 @@
 
   /*** CONFIGURATION ***/
   const CONFIG = {
-    inactiveHeight: 0.85,            // Height of inactive tabs (relative)
-    inactiveOpacity: 0.8,            // Background opacity of inactive tabs
-    inactiveTextOpacity: 1,          // Text opacity of inactive tabs
-    activeGlow: true,                // Enable glow for active tab
-    activeGlowStrength: 0.8,         // Glow intensity for active tab
-    activeScale: 1.1,                // Scale factor for active tab
-    hoverGlowStrength: 0.2,          // Glow intensity on hover
-    hoverScale: 1.02,                // Scale factor on hover
-    borderRadius: '4px 4px 0 0',     // Rounded tab corners
-    transitionSpeed: 250,            // Transition duration (ms)
-    minLuminanceForDarkText: 130     // Threshold: when to use black vs. white text
+    inactiveHeight: 0.85,
+    inactiveOpacity: 0.8,
+    inactiveTextOpacity: 1,
+    activeGlow: true,
+    activeGlowStrength: 0.8,
+    activeScale: 1.1,
+    hoverGlowStrength: 0.2,
+    hoverScale: 1.02,
+    borderRadius: '4px 4px 0 0',
+    transitionSpeed: 250,
+    minLuminanceForDarkText: 130,
+    uncoloredTabsMode: "style", // "skip", "style", "cssOnly"
+    uncoloredColor: 'rgba(220,220,220,1)'
   };
+
+  const STYLE_CLASS = 'gst-styled';
+  const CSS_ONLY_CLASS = 'gst-cssonly';
+  const LIGHT_TEXT_CLASS = 'gst-light-text';
+  const DARK_TEXT_CLASS = 'gst-dark-text';
 
   /*** ADD STYLESHEET ***/
   const style = document.createElement('style');
   style.textContent = `
-    .tab-color-fill {
+    .${STYLE_CLASS}, .${CSS_ONLY_CLASS} {
+      position: relative !important;
+      background: transparent !important;
+      overflow: visible;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform ${CONFIG.transitionSpeed}ms ease;
+    }
+    .${STYLE_CLASS} .tab-color-fill {
       position: absolute;
       left: 0; right: 0; bottom: 0;
       z-index: 0;
       pointer-events: none;
       border-radius: ${CONFIG.borderRadius};
-      transition:
-        height ${CONFIG.transitionSpeed}ms ease,
-        background ${CONFIG.transitionSpeed}ms linear,
-        box-shadow ${CONFIG.transitionSpeed}ms ease;
+      transition: height ${CONFIG.transitionSpeed}ms ease,
+                  background ${CONFIG.transitionSpeed}ms linear,
+                  box-shadow ${CONFIG.transitionSpeed}ms ease;
+      background: var(--tab-color-inactive, transparent);
+      height: calc(var(--inactive-height,0.85) * 100%);
+      box-shadow: 0 -2px 0 transparent;
     }
-    .docs-sheet-tab {
-      position: relative !important;
-      background: transparent !important;
-      overflow: visible;
-      transition: transform ${CONFIG.transitionSpeed}ms ease;
-    }
-    .docs-sheet-tab-name {
+    .${STYLE_CLASS} .docs-sheet-tab-name {
       position: relative;
       z-index: 1;
       font-weight: 600;
       white-space: nowrap;
       pointer-events: auto;
-      transition:
-        padding-top ${CONFIG.transitionSpeed}ms ease,
-        color ${CONFIG.transitionSpeed}ms linear,
-        opacity ${CONFIG.transitionSpeed}ms linear;
+      opacity: ${CONFIG.inactiveTextOpacity};
+      transition: opacity ${CONFIG.transitionSpeed}ms linear;
     }
-    .docs-sheet-tab.hovering {
-      z-index: 2;
+    .${STYLE_CLASS}.${LIGHT_TEXT_CLASS} .docs-sheet-tab-name { color: #fff; }
+    .${STYLE_CLASS}.${DARK_TEXT_CLASS} .docs-sheet-tab-name { color: #000; }
+    .${CSS_ONLY_CLASS} .docs-sheet-tab-name { font-weight: 600; }
+    .${STYLE_CLASS}.gst-active {
+      transform: scale(${CONFIG.activeScale});
+    }
+    .${STYLE_CLASS}.gst-active .tab-color-fill {
+      background: var(--tab-color);
+      height: 100% !important;
+      box-shadow: ${CONFIG.activeGlow ? '0 -2px 10px var(--tab-glow, transparent)' : 'none'};
+    }
+    .${STYLE_CLASS}.gst-active .docs-sheet-tab-name { opacity: 1; }
+    .${STYLE_CLASS}.gst-inactive:hover {
+      transform: scale(${CONFIG.hoverScale});
+    }
+    .${STYLE_CLASS}.gst-inactive:hover .tab-color-fill {
+      box-shadow: 0 -2px 8px var(--tab-hover-glow, transparent);
     }
   `;
   document.head.appendChild(style);
 
-  /*** HELPER FUNCTIONS ***/
-
-  // Calculate luminance of an RGB color
+  /*** HELPERS ***/
   const luminance = rgb => {
-    const m = rgb.match(/\d+/g);
+    const m = rgb && rgb.match(/\d+/g);
     if (!m) return 255;
-    const [r, g, b] = m.map(Number);
-    return 0.299 * r + 0.587 * g + 0.114 * b;
+    const [r,g,b] = m.map(Number);
+    return 0.299*r + 0.587*g + 0.114*b;
   };
-
-  // Add alpha channel to RGB
   const rgbaWithAlpha = (rgb, alpha) => {
-    const m = rgb.match(/\d+/g);
+    const m = rgb && rgb.match(/\d+/g);
     if (!m) return rgb;
-    const [r, g, b] = m.map(Number);
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    const [r,g,b] = m.map(Number);
+    return `rgba(${r},${g},${b},${alpha})`;
   };
 
-  // Get the tab’s assigned color
+  /*** COLOR HANDLING ***/
+  const colorCache = new WeakMap();
   const getTabColor = tab => {
-    const el = tab.querySelector('.docs-sheet-tab-color, .docs-sheet-tab-indicator, [data-tab-color]');
-    if (!el) return null;
-    const color = getComputedStyle(el).backgroundColor;
-    return (color && !color.includes('0, 0, 0, 0')) ? color : null;
+    if (colorCache.has(tab)) return colorCache.get(tab);
+    const el = tab.querySelector('.docs-sheet-tab-color,.docs-sheet-tab-indicator,[data-tab-color]');
+    let color = el ? getComputedStyle(el).backgroundColor : null;
+    if(!color || color.includes('0, 0, 0, 0')){
+      switch(CONFIG.uncoloredTabsMode){
+        case "skip": colorCache.set(tab,null); return null;
+        case "style": color=colorCache.set(tab, CONFIG.uncoloredColor); return CONFIG.uncoloredColor;
+        case "cssOnly": colorCache.set(tab,"cssOnly"); return "cssOnly";
+      }
+    }
+    colorCache.set(tab,color);
+    return color;
+  };
+  const invalidateColorCache = tab => colorCache.delete(tab);
+
+  /*** CLEANUP TAB ***/
+  const cleanupTab = tab => {
+    tab.classList.remove(STYLE_CLASS,CSS_ONLY_CLASS,'gst-active','gst-inactive',LIGHT_TEXT_CLASS,DARK_TEXT_CLASS);
+    const fill = tab.querySelector('.tab-color-fill');
+    if(fill) fill.remove();
+    tab.style.removeProperty('--tab-color');
+    tab.style.removeProperty('--tab-color-inactive');
+    tab.style.removeProperty('--tab-glow');
+    tab.style.removeProperty('--tab-hover-glow');
+    tab.style.removeProperty('--inactive-height');
   };
 
   /*** UPDATE SINGLE TAB ***/
   const updateTab = tab => {
     const name = tab.querySelector('.docs-sheet-tab-name');
+    if(!name) return;
     const color = getTabColor(tab);
+    if(!color){ cleanupTab(tab); return; }
+    if(color==="cssOnly"){ cleanupTab(tab); tab.classList.add(CSS_ONLY_CLASS); return; }
 
-    if (!name || !color) return;
+    tab.classList.add(STYLE_CLASS);
+    tab.classList.remove(CSS_ONLY_CLASS);
 
-    // Create the background fill if missing
     let fill = tab.querySelector('.tab-color-fill');
-    if (!fill) {
-      fill = document.createElement('div');
-      fill.className = 'tab-color-fill';
-      tab.prepend(fill);
-    }
+    if(!fill){ fill=document.createElement('div'); fill.className='tab-color-fill'; tab.prepend(fill); }
 
-    const active = tab.classList.contains('docs-sheet-active-tab')
-                || tab.getAttribute('aria-selected') === 'true';
+    tab.style.setProperty('--tab-color',color);
+    tab.style.setProperty('--tab-color-inactive',rgbaWithAlpha(color,CONFIG.inactiveOpacity));
+    tab.style.setProperty('--tab-glow',rgbaWithAlpha(color,CONFIG.activeGlowStrength));
+    tab.style.setProperty('--tab-hover-glow',rgbaWithAlpha(color,CONFIG.hoverGlowStrength));
+    tab.style.setProperty('--inactive-height',CONFIG.inactiveHeight);
 
-    // Fix: immediately remove hover state when tab is active
-    if (active) tab.classList.remove("hovering");
+    const isDark = luminance(color)<CONFIG.minLuminanceForDarkText;
+    tab.classList.toggle(LIGHT_TEXT_CLASS,isDark);
+    tab.classList.toggle(DARK_TEXT_CLASS,!isDark);
 
-    const tabHeight = tab.offsetHeight;
-    if (!tabHeight) return;
-
-    // Fill height
-    const fillHeight = active
-      ? tabHeight
-      : Math.max(1, tabHeight * CONFIG.inactiveHeight);
-    fill.style.height = fillHeight + 'px';
-
-    // Vertically center text
-    const textHeight = name.offsetHeight || 0;
-    const paddingTop = Math.max(0, (fillHeight - textHeight) / 2);
-    name.style.paddingTop = paddingTop + 'px';
-
-    // Set background color
-    fill.style.background = active
-      ? color
-      : rgbaWithAlpha(color, CONFIG.inactiveOpacity);
-
-    // Choose text color (white or black)
-    name.style.color = luminance(color) < CONFIG.minLuminanceForDarkText
-      ? '#fff'
-      : '#000';
-
-    // Text opacity
-    name.style.opacity = active ? 1 : CONFIG.inactiveTextOpacity;
-
-    // Effects: Glow & Scaling
-    if (active) {
-      if (CONFIG.activeGlow) {
-        fill.style.boxShadow = `0 -2px 10px ${rgbaWithAlpha(color, CONFIG.activeGlowStrength)}`;
-      }
-      tab.style.transform = `scale(${CONFIG.activeScale})`;
-
-    } else if (tab.classList.contains('hovering')) {
-      fill.style.boxShadow = `0 -2px 8px ${rgbaWithAlpha(color, CONFIG.hoverGlowStrength)}`;
-      tab.style.transform = `scale(${CONFIG.hoverScale})`;
-
-    } else {
-      fill.style.boxShadow = 'none';
-      tab.style.transform = 'scale(1)';
-    }
+    const active = tab.classList.contains('docs-sheet-active-tab') || tab.getAttribute('aria-selected')==='true';
+    tab.classList.toggle('gst-active',active);
+    tab.classList.toggle('gst-inactive',!active);
   };
 
-  // Update all tabs
-  const updateAll = () => {
-    document.querySelectorAll('.docs-sheet-tab').forEach(updateTab);
-  };
-
-  /*** MUTATION OBSERVER ***/
-  let scheduled = false;
-  const scheduleUpdate = () => {
-    if (scheduled) return;
-    scheduled = true;
-    requestAnimationFrame(() => {
-      scheduled = false;
-      updateAll();
+  /*** RAF THROTTLING ***/
+  let rafScheduled = false;
+  const scheduledTabs = new Set();
+  const scheduleUpdate = tab => {
+    if(!tab) return;
+    const color = getTabColor(tab);
+    if(color===null) return; // skip uncolored tabs
+    scheduledTabs.add(tab);
+    if(rafScheduled) return;
+    rafScheduled = true;
+    requestAnimationFrame(()=>{
+      for(const t of scheduledTabs) updateTab(t);
+      scheduledTabs.clear();
+      rafScheduled=false;
     });
   };
 
-  const observer = new MutationObserver(() => scheduleUpdate());
-  observer.observe(document.body, {
-    childList: true,
-    subtree: true,
-    attributes: true,
-    attributeFilter: ['class', 'aria-selected', 'data-tab-color']
-  });
-
-  /*** EVENTS (Hover Handling) ***/
-  document.addEventListener('mouseover', e => {
-    const tab = e.target.closest('.docs-sheet-tab');
-    if (!tab) return;
-
-    const isActive = tab.classList.contains('docs-sheet-active-tab')
-                  || tab.getAttribute('aria-selected') === 'true';
-    if (isActive) return;
-
-    if (!tab.classList.contains('hovering')) {
-      tab.classList.add('hovering');
-      updateTab(tab);
+  /*** OBSERVER FOR ATTRIBUTE CHANGES ***/
+  const tabStrip = document.querySelector('.docs-sheet-tab-strip') || document.body;
+  const observer = new MutationObserver(muts => {
+    for(const m of muts){
+      const tab = m.target.closest && m.target.closest('.docs-sheet-tab');
+      if(!tab) continue;
+      if(['class','aria-selected','data-tab-color'].includes(m.attributeName)){
+        if(m.attributeName==='data-tab-color') invalidateColorCache(tab);
+        scheduleUpdate(tab);
+      }
     }
   });
+  observer.observe(tabStrip,{childList:true,subtree:true,attributes:true,attributeFilter:['class','aria-selected','data-tab-color']});
 
-  document.addEventListener('mouseout', e => {
-    const tab = e.target.closest('.docs-sheet-tab');
-    if (!tab) return;
+  /*** INTERSECTION OBSERVER: Only style visible tabs ***/
+  const io = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      if(entry.isIntersecting) scheduleUpdate(entry.target);
+    });
+  }, { root: tabStrip, threshold: 0 });
 
-    const rel = e.relatedTarget;
-    if (rel && tab.contains(rel)) return;
-
-    if (tab.classList.contains('hovering')) {
-      tab.classList.remove('hovering');
-      updateTab(tab);
-    }
-  });
-
-  /*** INITIAL UPDATE ***/
-  scheduleUpdate();
+  document.querySelectorAll('.docs-sheet-tab').forEach(tab => io.observe(tab));
 
 })();
